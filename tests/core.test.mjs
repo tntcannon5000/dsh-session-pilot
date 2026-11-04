@@ -6,6 +6,7 @@ import {
   boundedExcerpt,
   composeContinuePrompt,
   decodeOperation,
+  inheritPermissionPreset,
   isTrustedRequest,
   parseArchiveSessionArgs,
   parseListSessionsArgs,
@@ -76,6 +77,63 @@ test('parseNewConversationArgs rejects malformed calls', () => {
   assert.throws(() => parseNewConversationArgs({}), TypeError)
   assert.throws(() => parseNewConversationArgs({ prompt: '' }), TypeError)
   assert.throws(() => parseNewConversationArgs({ prompt: 'x', title: '' }), TypeError)
+})
+
+/** Minimal Context stand-in exposing only the two optional services under test. */
+function fakeContext({ presets, sessions } = {}) {
+  return {
+    get: (name) => (name === 'permissionPresets' ? presets : name === 'sessions' ? sessions : undefined),
+  }
+}
+
+function fakeRegistry(presetName, { throws = false } = {}) {
+  const calls = []
+  return {
+    calls,
+    current: () => presetName,
+    set: (session, name) => {
+      if (throws) throw new Error('unknown preset')
+      calls.push({ session, name })
+    },
+  }
+}
+
+test('inheritPermissionPreset copies the source preset onto the new session', () => {
+  const preset = fakeRegistry('Full access')
+  const source = { id: 'source' }
+  const target = { id: 'target' }
+  const sessions = { get: (id) => (id === 'source' ? source : id === 'target' ? target : undefined) }
+  const ctx = fakeContext({ presets: preset, sessions })
+
+  assert.equal(inheritPermissionPreset(ctx, 'source', 'target'), 'Full access')
+  assert.deepEqual(preset.calls, [{ session: target, name: 'Full access' }])
+})
+
+test('inheritPermissionPreset leaves the default alone for a custom knob state', () => {
+  const preset = fakeRegistry('custom')
+  const sessions = { get: () => ({}) }
+  const ctx = fakeContext({ presets: preset, sessions })
+
+  assert.equal(inheritPermissionPreset(ctx, 'source', 'target'), undefined)
+  assert.deepEqual(preset.calls, [])
+})
+
+test('inheritPermissionPreset tolerates missing services, unknown sessions, and set failures', () => {
+  assert.equal(inheritPermissionPreset(fakeContext({}), 'source', 'target'), undefined)
+  assert.equal(inheritPermissionPreset(fakeContext({ presets: fakeRegistry('x') }), 'source', 'target'), undefined)
+
+  const preset = fakeRegistry('Full access')
+  const sessions = { get: () => undefined }
+  assert.equal(inheritPermissionPreset(fakeContext({ presets: preset, sessions }), 'source', 'target'), undefined)
+
+  const failing = fakeRegistry('Full access', { throws: true })
+  const both = { get: () => ({}) }
+  assert.equal(inheritPermissionPreset(fakeContext({ presets: failing, sessions: both }), 'source', 'target'), undefined)
+
+  // No source session means nothing to inherit from (blank creation without a caller).
+  const unused = fakeRegistry('Full access')
+  assert.equal(inheritPermissionPreset(fakeContext({ presets: unused, sessions: both }), undefined, 'target'), undefined)
+  assert.deepEqual(unused.calls, [])
 })
 
 test('decodeOperation round-trips blank and continue operations', () => {

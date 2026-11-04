@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type { IncomingMessage } from 'node:http'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
   MAX_REQUEST_BODY_BYTES,
@@ -275,6 +275,57 @@ function requireSessionController(ctx: Context): SessionControllerFace {
   return controller
 }
 
+/** Narrowed face of the permission-preset service this plugin consumes. */
+export interface PermissionPresetsFace {
+  current(session: Session): string
+  set(session: Session, name: string): void
+}
+
+/** Narrowed face of the in-memory session store this plugin consumes. */
+export interface SessionsFace {
+  get(id: SessionId): Session | undefined
+}
+
+/** Reserved preset name reporting knob values no configured preset matches. */
+const CUSTOM_PRESET = 'custom'
+
+/**
+ * Carry the source conversation's permission preset onto the new one, so a
+ * spawned chat keeps the access it was spawned under instead of the
+ * deployment's fresh-session default. Best effort by design: a deployment
+ * without the permission service, a session that is not registered yet, or an
+ * unmatched `custom` knob combination all leave the default in place rather
+ * than failing conversation creation.
+ */
+export function inheritPermissionPreset(
+  ctx: Context,
+  sourceSessionId: SessionId | undefined,
+  targetSessionId: SessionId,
+): string | undefined {
+  if (sourceSessionId === undefined) return undefined
+  const presets = ctx.get('permissionPresets') as PermissionPresetsFace | undefined
+  const sessions = ctx.get('sessions') as SessionsFace | undefined
+  if (presets === undefined || sessions === undefined) return undefined
+  const source = sessions.get(sourceSessionId)
+  const target = sessions.get(targetSessionId)
+  if (source === undefined || target === undefined) return undefined
+  let name: string
+  try {
+    name = presets.current(source)
+  } catch {
+    return undefined
+  }
+  // `custom` labels a knob combination that no preset can be selected by name;
+  // there is nothing to inherit from it without copying the knobs one by one.
+  if (name === CUSTOM_PRESET) return undefined
+  try {
+    presets.set(target, name)
+    return name
+  } catch {
+    return undefined
+  }
+}
+
 export interface CreateSessionPilotInput {
   readonly sourceSessionId?: SessionId
   readonly cwd?: string
@@ -306,6 +357,8 @@ export async function createSessionPilot(ctx: Context, input: CreateSessionPilot
           ...input.agentPreset === undefined ? {} : { agentPreset: input.agentPreset },
         },
   )
+  // Before the first prompt, so the opening turn already runs under it.
+  inheritPermissionPreset(ctx, input.sourceSessionId, created.sessionId)
   if (input.title !== undefined) {
     await controller.rename({ sessionId: created.sessionId, title: input.title })
   }
