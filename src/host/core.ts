@@ -265,6 +265,7 @@ export interface SessionControllerFace {
     mode: 'queue' | 'steer'
     content: readonly { type: 'text'; text: string }[]
   }, signal: AbortSignal): Promise<{ accepted: true }>
+  cancel(request: { sessionId: SessionId }): { accepted: true }
 }
 
 function requireSessionController(ctx: Context): SessionControllerFace {
@@ -462,6 +463,55 @@ export function parseArchiveSessionArgs(value: unknown): ArchiveSessionArgs {
   const record = objectValue(value)
   const sessionId = optionalSessionId(record['sessionId'])
   return sessionId === undefined ? {} : { sessionId }
+}
+
+/** How a message reaches a conversation that is already running. */
+export type SessionDeliveryMode = 'queue' | 'steer'
+
+export const SESSION_DELIVERY_MODES: readonly SessionDeliveryMode[] = ['queue', 'steer']
+
+function requiredSessionId(value: unknown, field = 'sessionId'): string {
+  const sessionId = optionalSessionId(value)
+  if (sessionId === undefined) throw new TypeError(`${field} is required for this tool.`)
+  return sessionId
+}
+
+/** Parsed `send_to_session` tool arguments. */
+export interface SendToSessionArgs {
+  readonly sessionId: string
+  readonly message: string
+  readonly mode: SessionDeliveryMode
+}
+
+export function parseSendToSessionArgs(value: unknown): SendToSessionArgs {
+  const record = objectValue(value)
+  const sessionId = requiredSessionId(record['sessionId'])
+  const message = validatePromptText(record['message'])
+  const rawMode = record['mode']
+  if (rawMode !== undefined && rawMode !== 'queue' && rawMode !== 'steer') {
+    throw new TypeError('mode must be "queue" or "steer".')
+  }
+  return { sessionId, message, mode: rawMode ?? 'queue' }
+}
+
+/** Parsed `cancel_session` tool arguments. */
+export interface CancelSessionArgs {
+  readonly sessionId: string
+}
+
+export function parseCancelSessionArgs(value: unknown): CancelSessionArgs {
+  const record = objectValue(value)
+  return { sessionId: requiredSessionId(record['sessionId']) }
+}
+
+/** Parsed `inspect_session` tool arguments. */
+export interface InspectSessionArgs {
+  readonly sessionId: string
+}
+
+export function parseInspectSessionArgs(value: unknown): InspectSessionArgs {
+  const record = objectValue(value)
+  return { sessionId: requiredSessionId(record['sessionId']) }
 }
 
 /** Narrowed face of the session-query service (live-preferred full reads). */
@@ -669,4 +719,105 @@ export async function archiveSession(
   }
   await registry.archiveSession(input.sessionId)
   return { sessionId: input.sessionId, archived: true }
+}
+
+// ---------------------------------------------------------------------------
+// Controlling a live conversation: send into it, stop it, inspect it
+// ---------------------------------------------------------------------------
+
+/**
+ * One visible conversation's compact row, or undefined. Reads the same `list`
+ * the Web UI's session list uses, so a conversation the user can see is one
+ * this can address — and one the user cannot see is refused rather than
+ * controlled blind.
+ */
+async function findVisibleSession(
+  controller: SessionControllerFace & SessionControllerListFace,
+  sessionId: SessionId,
+  signal: AbortSignal,
+): Promise<SessionListRow | undefined> {
+  const result = await controller.list({}, signal)
+  const match = result.items.find(item => String(item['sessionId']) === sessionId)
+  return match === undefined ? undefined : projectSessionSummary(match)
+}
+
+function requireVisibleSession(
+  controller: SessionControllerFace & SessionControllerListFace,
+  sessionId: SessionId,
+  signal: AbortSignal,
+): Promise<SessionListRow> {
+  return findVisibleSession(controller, sessionId, signal).then((row) => {
+    if (row === undefined) {
+      throw new TypeError(
+        `no visible conversation with id "${sessionId}"; use list_sessions to find the right id`,
+      )
+    }
+    return row
+  })
+}
+
+/** Narrowed face used by the control helpers: creation plus listing. */
+type SessionControlController = SessionControllerFace & SessionControllerListFace
+
+function requireControlController(ctx: Context): SessionControlController {
+  const controller = ctx.get('sessionController') as SessionControlController | undefined
+  if (controller === undefined) {
+    throw new Error('this deployment mounts no session controller; cannot control conversations')
+  }
+  return controller
+}
+
+/**
+ * Deliver one message into any visible conversation. `queue` appends it as the
+ * next user message; `steer` folds it into the turn that is running now. This
+ * is the same admission path the composer uses, so the message is durable,
+ * attributed to the user role, and seen by that conversation's model exactly
+ * as if it had been typed there.
+ */
+export async function sendToSession(
+  ctx: Context,
+  input: {
+    sessionId: SessionId
+    message: string
+    mode: SessionDeliveryMode
+    /** Id factory, injectable for tests. */
+    requestId?: string
+    signal?: AbortSignal
+  },
+): Promise<{ sessionId: string; mode: SessionDeliveryMode; accepted: true }> {
+  const controller = requireControlController(ctx)
+  const signal = input.signal ?? new AbortController().signal
+  await requireVisibleSession(controller, input.sessionId, signal)
+  await controller.prompt({
+    requestId: input.requestId ?? `session-pilot-${crypto.randomUUID()}`,
+    sessionId: input.sessionId,
+    mode: input.mode,
+    content: [{ type: 'text', text: input.message }],
+  }, signal)
+  return { sessionId: input.sessionId, mode: input.mode, accepted: true }
+}
+
+/**
+ * Stop the turn a conversation is running now. Queued messages are kept, so
+ * work already handed to it is not lost; `accepted` reports that the cancel
+ * reached the controller, not that a turn was running.
+ */
+export async function cancelSession(
+  ctx: Context,
+  input: { sessionId: SessionId; signal?: AbortSignal },
+): Promise<{ sessionId: string; accepted: true }> {
+  const controller = requireControlController(ctx)
+  const signal = input.signal ?? new AbortController().signal
+  await requireVisibleSession(controller, input.sessionId, signal)
+  const result = controller.cancel({ sessionId: input.sessionId })
+  return { sessionId: input.sessionId, accepted: result.accepted }
+}
+
+/** Report one conversation's title, running state, blank state and activity. */
+export async function inspectSession(
+  ctx: Context,
+  input: { sessionId: SessionId; signal?: AbortSignal },
+): Promise<SessionListRow> {
+  const controller = requireControlController(ctx)
+  return requireVisibleSession(controller, input.sessionId, input.signal ?? new AbortController().signal)
 }

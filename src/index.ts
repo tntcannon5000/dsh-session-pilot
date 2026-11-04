@@ -34,18 +34,24 @@ import {
   archiveSession,
   availablePresetIds,
   callerContext,
+  cancelSession,
   createSessionPilot,
   decodeOperation,
+  inspectSession,
   isTrustedRequest,
   listSessions,
   parseArchiveSessionArgs,
+  parseCancelSessionArgs,
+  parseInspectSessionArgs,
   parseListSessionsArgs,
   parseNewConversationArgs,
   parseReadSessionArgs,
   parseRenameSessionArgs,
+  parseSendToSessionArgs,
   readJsonBody,
   readSessionTranscript,
   renameSession,
+  sendToSession,
   validatePromptText,
 } from './host/core.ts'
 
@@ -356,6 +362,144 @@ function archiveSessionTool(ctx: Context): ToolDefinition {
   }
 }
 
+/** The `send_to_session` model tool: talk into any visible conversation. */
+function sendToSessionTool(ctx: Context): ToolDefinition {
+  return {
+    name: 'send_to_session',
+    description: 'Send a message into another conversation — one you created or any other the user '
+      + 'can see — exactly as if the user had typed it there. `mode: "queue"` adds it as the next '
+      + 'user message, picked up when that conversation finishes its current turn; `mode: "steer"` '
+      + 'folds it into the turn running now, so it can change course mid-flight. Use this to steer '
+      + 'work running in parallel, to answer a question another conversation asked, or to hand it '
+      + 'context. Read it first with read_session if you are unsure what it is doing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Target conversation id. Required.' },
+        message: { type: 'string', description: 'The complete message to deliver.' },
+        mode: {
+          type: 'string',
+          enum: ['queue', 'steer'],
+          description: '"queue" appends it as the next user message (default); "steer" injects it '
+            + 'into the turn that is running now.',
+        },
+      },
+      required: ['sessionId', 'message'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          sessionId: { type: 'string' },
+          mode: { type: 'string' },
+          accepted: { type: 'boolean' },
+        },
+        required: ['sessionId', 'mode', 'accepted'],
+      },
+      render: (_args, value) => {
+        const record = recordOf(value)
+        const how = record['mode'] === 'steer' ? 'steered into the running turn' : 'queued for its next turn'
+        return textBlock(`Message ${how} in conversation ${String(record['sessionId'])}.`)
+      },
+    },
+    async execute(args, exec) {
+      const parsed = parseSendToSessionArgs(args)
+      return sendToSession(ctx, {
+        sessionId: SessionId(parsed.sessionId),
+        message: parsed.message,
+        mode: parsed.mode,
+        signal: exec.signal,
+      })
+    },
+  }
+}
+
+/** The `cancel_session` model tool: stop whatever a conversation is doing. */
+function cancelSessionTool(ctx: Context): ToolDefinition {
+  return {
+    name: 'cancel_session',
+    description: 'Stop the turn a conversation is running right now, the equivalent of the user '
+      + 'pressing Stop in that chat. Works on any visible conversation. Messages already queued for '
+      + 'it are kept, so handing it new work afterwards works normally. Reports that the cancel was '
+      + 'accepted, which does not prove a turn was running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Target conversation id. Required.' },
+      },
+      required: ['sessionId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          sessionId: { type: 'string' },
+          accepted: { type: 'boolean' },
+        },
+        required: ['sessionId', 'accepted'],
+      },
+      render: (_args, value) => {
+        const record = recordOf(value)
+        return textBlock(`Cancel accepted for conversation ${String(record['sessionId'])}.`)
+      },
+    },
+    async execute(args, exec) {
+      const parsed = parseCancelSessionArgs(args)
+      return cancelSession(ctx, { sessionId: SessionId(parsed.sessionId), signal: exec.signal })
+    },
+  }
+}
+
+/** The `inspect_session` model tool: one conversation's live state. */
+function inspectSessionTool(ctx: Context): ToolDefinition {
+  return {
+    name: 'inspect_session',
+    description: 'Report one conversation\'s title, whether it is running right now, whether it is '
+      + 'still blank, and when it was last active. Use before send_to_session or cancel_session when '
+      + 'you need to know whether the conversation is mid-turn.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'Target conversation id. Required.' },
+      },
+      required: ['sessionId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          sessionId: { type: 'string' },
+          title: { type: 'string' },
+          running: { type: 'boolean' },
+          blank: { type: 'boolean' },
+          updatedAt: { type: 'number' },
+          cwd: { type: 'string' },
+        },
+        required: ['sessionId', 'running', 'blank', 'updatedAt'],
+      },
+      render: (_args, value) => {
+        const record = recordOf(value)
+        const title = typeof record['title'] === 'string' ? ` "${record['title']}"` : ''
+        const state = record['running'] === true ? 'running' : record['blank'] === true ? 'blank' : 'idle'
+        return textBlock(`Conversation${title} (${String(record['sessionId'])}) is ${state}.`)
+      },
+    },
+    async execute(args, exec) {
+      const parsed = parseInspectSessionArgs(args)
+      const row = await inspectSession(ctx, { sessionId: SessionId(parsed.sessionId), signal: exec.signal })
+      const { title: _title, cwd: _cwd, ...rest } = row
+      return {
+        ...rest,
+        ...row.title === null ? {} : { title: row.title },
+        ...row.cwd === undefined ? {} : { cwd: row.cwd },
+      }
+    },
+  }
+}
+
 function respondJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -413,6 +557,9 @@ export function apply(ctx: Context): void {
   ctx.tools.register(listSessionsTool(ctx))
   ctx.tools.register(readSessionTool(ctx))
   ctx.tools.register(archiveSessionTool(ctx))
+  ctx.tools.register(sendToSessionTool(ctx))
+  ctx.tools.register(cancelSessionTool(ctx))
+  ctx.tools.register(inspectSessionTool(ctx))
 
   ctx.inject(['webServer'], (webCtx) => {
     const webServer = webCtx.webServer
@@ -434,12 +581,16 @@ export {
   archiveSession,
   availablePresetIds,
   callerContext,
+  cancelSession,
   createSessionPilot,
   decodeOperation,
   inheritPermissionPreset,
+  inspectSession,
   isTrustedRequest,
   listSessions,
   parseArchiveSessionArgs,
+  parseCancelSessionArgs,
+  parseInspectSessionArgs,
   parseListSessionsArgs,
   parseNewConversationArgs,
   parseReadSessionArgs,

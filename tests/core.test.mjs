@@ -4,17 +4,23 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import {
   boundedExcerpt,
+  cancelSession,
   composeContinuePrompt,
   decodeOperation,
   inheritPermissionPreset,
+  inspectSession,
   isTrustedRequest,
   parseArchiveSessionArgs,
+  parseCancelSessionArgs,
+  parseInspectSessionArgs,
   parseListSessionsArgs,
   parseNewConversationArgs,
   parseReadSessionArgs,
   parseRenameSessionArgs,
+  parseSendToSessionArgs,
   projectSessionSummary,
   projectTranscript,
+  sendToSession,
   validatePromptText,
   MAX_EXCERPT_CHARS,
   LIST_SESSIONS_DEFAULT_LIMIT,
@@ -277,4 +283,114 @@ test('built host bundle exposes the cordis plugin shape', async () => {
   assert.equal(host.name, 'session-pilot')
   assert.deepEqual(host.inject, ['tools'])
   assert.equal(typeof host.apply, 'function')
+})
+
+// ---------------------------------------------------------------------------
+// Controlling another conversation: parse, deliver, stop, inspect
+// ---------------------------------------------------------------------------
+
+/** Session-controller stand-in: listing for visibility, prompt and cancel recorded. */
+function fakeControlController({ sessions = [], cancelResult = { accepted: true } } = {}) {
+  const calls = { prompt: [], cancel: [] }
+  return {
+    calls,
+    list: async () => ({ items: sessions }),
+    search: async () => ({ items: [], hasMore: false }),
+    prompt: async (request) => {
+      calls.prompt.push(request)
+      return { accepted: true }
+    },
+    cancel: (request) => {
+      calls.cancel.push(request)
+      return cancelResult
+    },
+  }
+}
+
+function controlContext(controller) {
+  return { get: (name) => (name === 'sessionController' ? controller : undefined) }
+}
+
+const visibleSession = (sessionId, extra = {}) => ({
+  sessionId,
+  running: false,
+  blank: false,
+  updatedAt: 1793750000000,
+  projections: { values: { title: 'Benchmark run' } },
+  ...extra,
+})
+
+test('parseSendToSessionArgs requires a target and a message, defaulting to queue', () => {
+  assert.deepEqual(
+    parseSendToSessionArgs({ sessionId: 'session-1', message: 'go on' }),
+    { sessionId: 'session-1', message: 'go on', mode: 'queue' },
+  )
+  assert.deepEqual(
+    parseSendToSessionArgs({ sessionId: 'session-1', message: 'stop that', mode: 'steer' }),
+    { sessionId: 'session-1', message: 'stop that', mode: 'steer' },
+  )
+  assert.throws(() => parseSendToSessionArgs({ message: 'go on' }), TypeError)
+  assert.throws(() => parseSendToSessionArgs({ sessionId: 'session-1' }), TypeError)
+  assert.throws(() => parseSendToSessionArgs({ sessionId: 'session-1', message: '   ' }), TypeError)
+  assert.throws(() => parseSendToSessionArgs({ sessionId: 'session-1', message: 'x', mode: 'shout' }), TypeError)
+})
+
+test('parseCancelSessionArgs and parseInspectSessionArgs require a target', () => {
+  assert.deepEqual(parseCancelSessionArgs({ sessionId: 'session-1' }), { sessionId: 'session-1' })
+  assert.deepEqual(parseInspectSessionArgs({ sessionId: 'session-1' }), { sessionId: 'session-1' })
+  assert.throws(() => parseCancelSessionArgs({}), TypeError)
+  assert.throws(() => parseInspectSessionArgs({}), TypeError)
+})
+
+test('sendToSession delivers through the controller with the requested mode', async () => {
+  const controller = fakeControlController({ sessions: [visibleSession('session-9')] })
+  const ctx = controlContext(controller)
+
+  assert.deepEqual(
+    await sendToSession(ctx, { sessionId: 'session-9', message: 'hello', mode: 'queue', requestId: 'req-1' }),
+    { sessionId: 'session-9', mode: 'queue', accepted: true },
+  )
+  assert.deepEqual(controller.calls.prompt, [{
+    requestId: 'req-1',
+    sessionId: 'session-9',
+    mode: 'queue',
+    content: [{ type: 'text', text: 'hello' }],
+  }])
+
+  await sendToSession(ctx, { sessionId: 'session-9', message: 'steer me', mode: 'steer', requestId: 'req-2' })
+  assert.equal(controller.calls.prompt[1].mode, 'steer')
+})
+
+test('control tools refuse a conversation the user cannot see', async () => {
+  const controller = fakeControlController({ sessions: [visibleSession('session-1')] })
+  const ctx = controlContext(controller)
+
+  await assert.rejects(
+    sendToSession(ctx, { sessionId: 'session-other', message: 'hi', mode: 'queue' }),
+    /no visible conversation/,
+  )
+  await assert.rejects(cancelSession(ctx, { sessionId: 'session-other' }), /no visible conversation/)
+  await assert.rejects(inspectSession(ctx, { sessionId: 'session-other' }), /no visible conversation/)
+  assert.deepEqual(controller.calls.prompt, [])
+  assert.deepEqual(controller.calls.cancel, [])
+})
+
+test('cancelSession stops the addressed conversation', async () => {
+  const controller = fakeControlController({ sessions: [visibleSession('session-2')] })
+  const result = await cancelSession(controlContext(controller), { sessionId: 'session-2' })
+
+  assert.deepEqual(result, { sessionId: 'session-2', accepted: true })
+  assert.deepEqual(controller.calls.cancel, [{ sessionId: 'session-2' }])
+})
+
+test('inspectSession reports the live row for a visible conversation', async () => {
+  const controller = fakeControlController({
+    sessions: [visibleSession('session-3', { running: true, updatedAt: 42 })],
+  })
+  const row = await inspectSession(controlContext(controller), { sessionId: 'session-3' })
+
+  assert.equal(row.title, 'Benchmark run')
+  assert.equal(row.running, true)
+  assert.equal(row.blank, false)
+  assert.equal(row.updatedAt, 42)
 })

@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-pilot",
   "description": "Manage DeepSeek Harness conversations from inside a conversation: new_conversation, rename_session, list_sessions, read_session, archive_session model tools plus official-slot UI actions",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
