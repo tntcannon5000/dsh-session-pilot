@@ -5,9 +5,20 @@ import { fileURLToPath } from 'node:url'
 
 const pluginRoot = fileURLToPath(new URL('..', import.meta.url))
 
+/** npm/pnpm write `.cmd` shims on Windows, which `spawn` needs spelled out. */
+function binPath(name) {
+  const file = process.platform === 'win32' ? `${name}.cmd` : name
+  return join(pluginRoot, 'node_modules', '.bin', file)
+}
+
 function run(command, args) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd: pluginRoot, stdio: 'inherit', env: process.env })
+    const child = spawn(command, args, {
+      cwd: pluginRoot,
+      stdio: 'inherit',
+      env: process.env,
+      shell: process.platform === 'win32',
+    })
     child.once('error', reject)
     child.once('exit', (code, signal) => {
       if (code === 0) {
@@ -22,8 +33,8 @@ function run(command, args) {
 for (const dir of ['dist', 'dist-host', 'dist-testing']) {
   await rm(join(pluginRoot, dir), { recursive: true, force: true })
 }
-await run(join(pluginRoot, 'node_modules/.bin/tsc'), ['-p', 'tsconfig.json'])
-await run(join(pluginRoot, 'node_modules/.bin/tsdown'), ['--config', 'tsdown.config.ts'])
+await run(binPath('tsc'), ['-p', 'tsconfig.json'])
+await run(binPath('tsdown'), ['--config', 'tsdown.config.ts'])
 await copyFile(join(pluginRoot, 'dist-host', 'index.js'), join(pluginRoot, 'index.mjs'))
 await copyFile(join(pluginRoot, 'dist-testing', 'testing.js'), join(pluginRoot, 'testing.mjs'))
 await copyFile(join(pluginRoot, 'dist', 'client.js'), join(pluginRoot, 'client.js'))
