@@ -36,8 +36,21 @@ Behavior:
 
 Everything else is upstream's code: creation still goes through the official
 `sessionController.create` → `rename` → `prompt` path, so created conversations are
-ordinary durable Sessions. The picker is model-facing only; the Client half's
-"+ New chat" and "⧉" buttons are unchanged.
+ordinary durable Sessions. The picker is model-facing only; the Client half keeps
+"⧉" only (see below).
+
+## Header button removed
+
+The `＋ New chat` button in the conversation header is gone. `src/client/index.ts` no
+longer registers `SessionPilotHeaderAction` (`session-pilot-open`) on
+`conversation.session.header.actions`; the header slot is left untouched for other
+plugins. Nothing else changed: the Host `POST /session-pilot` route and all five model
+tools stay, and the `⧉` action (`session-pilot-continue` on
+`conversation.chat.assistant-actions`) still calls the same route, so blank creation is
+still reachable — by the model, by the route, and by this deployment's own tooling.
+`src/client/SessionPilotHeaderAction.tsx` is intentionally kept as dead source (upstream
+still owns it) to keep the upstream-sync merge trivial; it is no longer imported, so it
+is absent from the built `client.js`.
 
 ## Extra fix
 
@@ -67,6 +80,7 @@ pnpm run build`.
 | `src/host/core.ts` | `preset` argument parsing + `availablePresetIds()` roster read; result carries `agentPreset` |
 | `src/index.ts` | tool schema/description/execute changes |
 | `src/shared.ts` | `SessionPilotResult.agentPreset` |
+| `src/client/index.ts` | `＋ New chat` header action unregistered (⧉ kept) |
 | `tests/core.test.mjs` | preset parsing tests |
 | `scripts/build.mjs` | portable bin shim |
 | `.github/workflows/` | upstream sync + feature detection |

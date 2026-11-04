@@ -17,7 +17,6 @@ import { SessionId, type SessionId as SessionIdType } from '@deepseek-ai/dsh-ses
 import type { SessionPilotLocaleKey } from '../shared.ts'
 import { SessionPilotController } from './controller.ts'
 import { SESSION_PILOT_EN, SESSION_PILOT_ZH } from './locales.ts'
-import { SessionPilotHeaderAction } from './SessionPilotHeaderAction.tsx'
 import { ContinueInSessionPilotAction } from './ContinueInSessionPilotAction.tsx'
 
 export const inject = ['slots', 'conversation', 'connection', 'sessions']
@@ -54,14 +53,6 @@ export function apply(ctx: ClientContext): void {
     }
     return controller
   }
-
-  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
-    name: 'conversation.session.header.actions',
-    id: 'session-pilot-open',
-    order: 30,
-    ...locale === undefined ? {} : { locale: 'session-pilot' as const },
-    inject: sessionId => controllerFor(SessionId(sessionId)).face,
-  }, SessionPilotHeaderAction))
 
   ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
     name: 'conversation.chat.assistant-actions',
