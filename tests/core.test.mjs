@@ -57,6 +57,20 @@ test('parseNewConversationArgs accepts a minimal call and a titled call', () => 
   )
 })
 
+test('parseNewConversationArgs carries an optional preset id', () => {
+  assert.deepEqual(
+    parseNewConversationArgs({ prompt: 'do it', preset: ' daily ' }),
+    { prompt: 'do it', preset: 'daily' },
+  )
+  assert.deepEqual(
+    parseNewConversationArgs({ prompt: 'do it', title: 'T', preset: 'cordis' }),
+    { prompt: 'do it', title: 'T', preset: 'cordis' },
+  )
+  assert.throws(() => parseNewConversationArgs({ prompt: 'x', preset: '' }), TypeError)
+  assert.throws(() => parseNewConversationArgs({ prompt: 'x', preset: 'Daily Mode' }), TypeError)
+  assert.throws(() => parseNewConversationArgs({ prompt: 'x', preset: 7 }), TypeError)
+})
+
 test('parseNewConversationArgs rejects malformed calls', () => {
   assert.throws(() => parseNewConversationArgs(null), TypeError)
   assert.throws(() => parseNewConversationArgs({}), TypeError)

@@ -32,6 +32,7 @@ import {
 import {
   BodyTooLargeError,
   archiveSession,
+  availablePresetIds,
   callerContext,
   createSessionPilot,
   decodeOperation,
@@ -84,7 +85,9 @@ const NEW_CONVERSATION_DESCRIPTION = [
   'that the user can open from the sidebar — for example spinning off a side',
   'question, or handing a well-scoped task a fresh context. The new',
   'conversation shares no history with this one: put everything it needs into',
-  '`prompt`. It is created in the same workspace as this conversation and',
+  '`prompt`. Pass `preset` to start it in a specific agent mode (for example',
+  '`standard`, `daily`, or `cordis`); omit it to inherit this conversation\'s',
+  'mode. It is created in the same workspace as this conversation and',
   'starts running immediately. Returns the new session id; tell the user they',
   'can open it from the session list. For background work that should report',
   'back into this conversation, prefer subagent instead.',
@@ -107,6 +110,11 @@ function newConversationTool(ctx: Context): ToolDefinition {
           type: 'string',
           description: 'Optional short title for the new conversation.',
         },
+        preset: {
+          type: 'string',
+          description: 'Optional agent-preset id the new conversation runs in, such as '
+            + '"standard" or "daily". Omit to inherit this conversation\'s preset.',
+        },
       },
       required: ['prompt'],
     },
@@ -118,6 +126,7 @@ function newConversationTool(ctx: Context): ToolDefinition {
           sessionId: { type: 'string' },
           title: { type: 'string' },
           workspaceId: { type: 'string' },
+          agentPreset: { type: 'string' },
           accepted: { type: 'boolean' },
         },
         required: ['sessionId', 'accepted'],
@@ -125,8 +134,11 @@ function newConversationTool(ctx: Context): ToolDefinition {
       render: (_args, value) => {
         const record = recordOf(value)
         const title = typeof record['title'] === 'string' ? ` "${record['title']}"` : ''
+        const preset = typeof record['agentPreset'] === 'string'
+          ? ` in the ${record['agentPreset']} preset`
+          : ''
         return textBlock(
-          `New conversation${title} created (session ${String(record['sessionId'] ?? '?')}). `
+          `New conversation${title} created${preset} (session ${String(record['sessionId'] ?? '?')}). `
           + 'It is running with your initial message. Tell the user they can open it '
           + 'from the session list in the sidebar.',
         )
@@ -135,10 +147,19 @@ function newConversationTool(ctx: Context): ToolDefinition {
     async execute(args, exec) {
       const parsed = parseNewConversationArgs(args)
       const caller = callerContext(exec.agent)
+      if (parsed.preset !== undefined) {
+        const roster = await availablePresetIds(ctx)
+        if (roster !== undefined && !roster.includes(parsed.preset)) {
+          throw new TypeError(
+            `unknown agent preset "${parsed.preset}"; available presets: ${roster.join(', ')}`,
+          )
+        }
+      }
+      const agentPreset = parsed.preset ?? caller.agentPreset
       const result: SessionPilotResult = await createSessionPilot(ctx, {
         ...caller.sessionId === undefined ? {} : { sourceSessionId: caller.sessionId },
         ...caller.cwd === undefined ? {} : { cwd: caller.cwd },
-        ...caller.agentPreset === undefined ? {} : { agentPreset: caller.agentPreset },
+        ...agentPreset === undefined ? {} : { agentPreset },
         prompt: parsed.prompt,
         ...parsed.title === undefined ? {} : { title: parsed.title },
         signal: exec.signal,
@@ -408,6 +429,7 @@ export {
 } from './shared.ts'
 export {
   archiveSession,
+  availablePresetIds,
   callerContext,
   createSessionPilot,
   decodeOperation,

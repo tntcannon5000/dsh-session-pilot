@@ -152,6 +152,38 @@ export function decodeOperation(value: unknown): SessionPilotOperation {
 export interface NewConversationArgs {
   readonly prompt: string
   readonly title?: string
+  /** Agent preset for the new conversation; omitted inherits the caller's. */
+  readonly preset?: string
+}
+
+/** Agent-preset ids are lowercase letters, digits, and hyphens. */
+const PRESET_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
+
+function optionalPresetId(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError('preset must be a non-empty string when present.')
+  }
+  const trimmed = value.trim()
+  if (!PRESET_ID_PATTERN.test(trimmed)) {
+    throw new TypeError('preset must be a lowercase preset id such as "standard".')
+  }
+  return trimmed
+}
+
+/**
+ * Preset ids the mounted agent-preset registry offers, or undefined when this
+ * deployment mounts no roster. Best-effort: a failing registry must not block
+ * conversation creation, so the caller falls back to passing the id through.
+ */
+export async function availablePresetIds(ctx: Context): Promise<string[] | undefined> {
+  const registry = ctx.get('agentPresets') as { list(): Promise<readonly { id: string }[]> } | undefined
+  if (registry === undefined) return undefined
+  try {
+    return (await registry.list()).map(preset => preset.id)
+  } catch {
+    return undefined
+  }
 }
 
 /** Validate the raw model arguments (raw-JSON-Schema tools self-validate). */
@@ -159,7 +191,12 @@ export function parseNewConversationArgs(value: unknown): NewConversationArgs {
   const record = objectValue(value)
   const prompt = validatePromptText(record['prompt'])
   const title = optionalTitle(record['title'])
-  return { prompt, ...title === undefined ? {} : { title } }
+  const preset = optionalPresetId(record['preset'])
+  return {
+    prompt,
+    ...title === undefined ? {} : { title },
+    ...preset === undefined ? {} : { preset },
+  }
 }
 
 /** Caller facts recoverable from the executing Agent, when one is present. */
@@ -285,6 +322,7 @@ export async function createSessionPilot(ctx: Context, input: CreateSessionPilot
     sessionId: created.sessionId,
     ...input.title === undefined ? {} : { title: input.title },
     ...workspace === undefined ? {} : { workspaceId: workspace.id },
+    ...created.agentPreset === undefined ? {} : { agentPreset: created.agentPreset },
   }
 }
 

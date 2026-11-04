@@ -36,6 +36,8 @@ export interface SessionPilotResult {
   readonly sessionId: string
   readonly title?: string
   readonly workspaceId?: string
+  /** Agent preset the new conversation runs, when the Host reported one. */
+  readonly agentPreset?: string
 }
 
 /** Wire error body. */
