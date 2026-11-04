@@ -85,9 +85,10 @@ const NEW_CONVERSATION_DESCRIPTION = [
   'that the user can open from the sidebar — for example spinning off a side',
   'question, or handing a well-scoped task a fresh context. The new',
   'conversation shares no history with this one: put everything it needs into',
-  '`prompt`. Pass `preset` to start it in a specific agent mode (for example',
-  '`standard`, `daily`, or `cordis`); omit it to inherit this conversation\'s',
-  'mode. It is created in the same workspace as this conversation and',
+  '`prompt`. It continues in this conversation\'s agent mode by default: pass',
+  '`preset` only when the new conversation genuinely needs a different one,',
+  'such as an autonomous or specialized mode for the task being handed off;',
+  'otherwise omit it. It is created in the same workspace as this conversation and',
   'starts running immediately. Returns the new session id; tell the user they',
   'can open it from the session list. For background work that should report',
   'back into this conversation, prefer subagent instead.',
@@ -112,8 +113,9 @@ function newConversationTool(ctx: Context): ToolDefinition {
         },
         preset: {
           type: 'string',
-          description: 'Optional agent-preset id the new conversation runs in, such as '
-            + '"standard" or "daily". Omit to inherit this conversation\'s preset.',
+          description: 'Optional agent-preset id, only when the new conversation needs a '
+            + 'different mode than this one (for example an autonomous mode). Omit to '
+            + 'inherit this conversation\'s preset, which is the default.',
         },
       },
       required: ['prompt'],

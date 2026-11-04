@@ -23,6 +23,9 @@ Behavior:
 - `preset` is optional. Omitted, the tool keeps upstream behavior exactly: the new
   conversation inherits the calling session's latest `agent-preset/selected`, falling
   back to the session header.
+- Inheritance is the intended default, on purpose. A new conversation should look like
+  the chat it came from; a preset is an explicit, warranted deviation — handing work to
+  an autonomous or otherwise specialized mode — and the tool text says so.
 - When a preset is given, it is validated against the live `agentPresets` roster before
   creating anything. An unknown id fails the call with the list of valid ids rather
   than silently creating a conversation in the wrong mode. If the deployment mounts no
