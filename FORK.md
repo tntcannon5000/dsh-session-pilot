@@ -39,6 +39,28 @@ Everything else is upstream's code: creation still goes through the official
 ordinary durable Sessions. The picker is model-facing only; the Client half keeps
 "⧉" only (see below).
 
+## Control any visible conversation
+
+Upstream could create and read conversations but not act on one while another turn was
+running, so steering parallel work meant the user's hands on that chat's composer. Three
+tools close that, addressed by session id and working on any conversation the user can
+see — including ones this agent did not create:
+
+- `send_to_session` — deliver a message into another conversation, either `queue`d for
+  its next turn or `steer`ed into the running one, through the same prompt admission the
+  composer uses (durable, user-role, seen by that conversation's model as if typed there).
+- `cancel_session` — stop that conversation's current turn, the equivalent of the user
+  pressing Stop. Queued messages are kept. `accepted` means the cancel reached the
+  controller, not that a turn was running.
+- `inspect_session` — title, running/blank state and last activity, so a caller can tell
+  whether it is mid-turn before sending or cancelling.
+
+Access follows the session list the Web UI shows: a conversation the user can see is one
+these tools can address, and one the user cannot see is refused with a clear error rather
+than controlled blind. They are host-side tools, so they act with the host's authority
+rather than a plugin-scoped one — worth remembering when reasoning about prompt injection
+in a session that can call them.
+
 ## Header button removed
 
 The `＋ New chat` button in the conversation header is gone. `src/client/index.ts` no
