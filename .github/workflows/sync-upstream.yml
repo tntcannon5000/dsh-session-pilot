@@ -1,0 +1,161 @@
+name: sync-upstream
+
+# Keeps this fork close to ruby1304/dsh-session-pilot and flags the day upstream
+# grows the feature this fork exists for, so the fork can be retired instead of
+# maintained. See FORK.md.
+
+on:
+  schedule:
+    - cron: '17 5 * * *' # daily, off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/ruby1304/dsh-session-pilot.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    name: Merge upstream and verify
+    runs-on: ubuntu-latest
+    outputs:
+      synced: ${{ steps.check.outputs.up_to_date == 'false' }}
+    steps:
+      - name: Check out this fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+      - name: Decide whether anything is new
+        id: check
+        run: |
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Fork already contains upstream/$UPSTREAM_BRANCH." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "New upstream commits:"
+              echo '```'
+              git log --oneline "HEAD..upstream/$UPSTREAM_BRANCH"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A conflict fails this step, so a half-merged branch is never pushed.
+      # Resolve it locally: git pull upstream main, fix, commit, push.
+      - name: Merge upstream
+        if: steps.check.outputs.up_to_date == 'false'
+        run: git merge --no-edit "upstream/$UPSTREAM_BRANCH"
+
+      - name: Set up pnpm
+        if: steps.check.outputs.up_to_date == 'false'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node
+        if: steps.check.outputs.up_to_date == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        if: steps.check.outputs.up_to_date == 'false'
+        run: pnpm install --frozen-lockfile
+
+      # The fork's delta is small and typechecked; if an upstream change breaks
+      # it, this fails before anything reaches main.
+      - name: Typecheck and test
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          pnpm run typecheck
+          pnpm test
+
+      - name: Push the synced branch
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          git push origin "HEAD:$UPSTREAM_BRANCH"
+          echo "Pushed synced main." >> "$GITHUB_STEP_SUMMARY"
+
+  detect-upstream-feature:
+    name: Detect preset support upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read upstream source at its tip
+        run: |
+          git clone --depth 1 --branch "$UPSTREAM_BRANCH" "$UPSTREAM_REPO" upstream
+          git -C upstream log -1 --oneline
+
+      # The fork exists because upstream's new_conversation parser ignores a
+      # preset argument. Either shape changing means upstream now accepts one:
+      # the argument parser reading `preset`, or the tool schema declaring it.
+      - name: Look for preset support in upstream
+        id: detect
+        run: |
+          found=false
+          if grep -Eq "\['preset'\]" upstream/src/host/core.ts; then
+            found=true
+            echo "upstream parser reads a preset argument (src/host/core.ts)"
+          fi
+          if grep -Eq "^\s*preset:\s*\{" upstream/src/index.ts; then
+            found=true
+            echo "upstream tool schema declares preset (src/index.ts)"
+          fi
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
+      - name: Open the retire-fork issue
+        if: steps.detect.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title='Upstream supports preset selection — retire this fork'
+          # Idempotent: one issue ever, refreshed rather than duplicated.
+          existing=$(gh issue list --state all --search "$title in:title" \
+            --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)
+          body=$(cat <<'EOF'
+          `ruby1304/dsh-session-pilot` now accepts a preset argument on its own, so this
+          fork's only reason to exist is gone.
+
+          To migrate:
+
+          1. Check the upstream release supports everything `FORK.md` lists (preset
+             argument, optional semantics, roster validation — or decide you do not
+             need the validation).
+          2. Repoint the DSH profile install at upstream and drop this fork.
+          3. Archive this repository.
+
+          Reopen or edit this issue if the detection was a false positive.
+          EOF
+          )
+          if [ -n "$existing" ]; then
+            echo "Issue #$existing already tracks this; leaving it untouched."
+            echo "Upstream preset support detected; tracked by #$existing." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh issue create --title "$title" --body "$body"
+            echo "Opened the retire-fork issue." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Record the negative result
+        if: steps.detect.outputs.found != 'true'
+        run: echo "Upstream still has no preset support; the fork is still needed." >> "$GITHUB_STEP_SUMMARY"
