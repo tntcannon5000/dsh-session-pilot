@@ -52,6 +52,26 @@ still reachable — by the model, by the route, and by this deployment's own too
 still owns it) to keep the upstream-sync merge trivial; it is no longer imported, so it
 is absent from the built `client.js`.
 
+## Permissions are inherited too
+
+A spawned conversation is a *fresh* session, so the Host applied the deployment's
+default permission preset (`workspace-write`) even when the parent ran with Full access —
+silently narrowing what the new chat could do. The fork now carries the source
+conversation's permission preset onto the new one:
+
+- `inheritPermissionPreset()` reads the source session's effective preset through
+  `ctx.permissionPresets.current(session)` and applies it with `set(targetSession, name)`,
+  resolving both through `ctx.sessions.get(id)`.
+- It runs between `sessionController.create` and the first `prompt`, so the opening turn
+  already runs under the inherited access. In a real child log the permission events land
+  before `turn/start`.
+- Best effort by design: no `permissionPresets` service (headless), a session not yet
+  registered, an unmatched `custom` knob combination, or a throwing `set()` all leave the
+  fresh-session default in place rather than failing conversation creation.
+- `custom` is the one real gap: knob values no configured preset matches cannot be
+  selected by name. Inheriting those would mean copying sandbox mode and approval policy
+  through their own setters.
+
 ## Extra fix
 
 `scripts/build.mjs` looks for `node_modules/.bin/tsc` without an extension, which
