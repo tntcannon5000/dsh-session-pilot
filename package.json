@@ -140,7 +140,8 @@
     "typescript": "^6.0.3"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.1.5-rc.1"
   },
   "publishConfig": {
     "access": "public"
