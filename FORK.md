@@ -90,8 +90,43 @@ change on POSIX.
   argument on its own, the job opens (or refreshes) an issue titled
   *"Upstream supports preset selection — retire this fork"*.
 
-To take upstream's changes locally: `git pull` in your clone, then `pnpm install &&
-pnpm run build`.
+To take upstream's changes locally: `git pull` in your clone, then repack and reinstall (below).
+
+## Installing this plugin
+
+The plugin is installed from a **packed tarball**, not a `link:` to the clone:
+
+```
+~/.dsh/profiles/desktop/package.json
+  "dsh-session-pilot": "file:C:/Users/niran/.dsh/packages/dsh-session-pilot-0.1.0.tgz"
+```
+
+That matters. With a `link:` install the running Host serves whatever build sits in the
+clone's working tree, so checking out another branch (or leaving a PR branch built)
+silently swaps the live plugin — which happened once: the host served upstream's client
+bundle and the header button reappeared. A packed snapshot cannot be affected by anything
+done in the working tree, including branch switches and partial builds.
+
+To ship a change to the running Host:
+
+```bash
+cd <clone>
+git checkout main && git pull          # the build must come from the branch you want live
+node ./scripts/build.mjs               # writes index.mjs / testing.mjs / client.js / client.js.map
+pnpm pack --pack-destination ~/.dsh/packages   # produces dsh-session-pilot-<version>.tgz
+```
+
+then install that tarball through the plugin manager (`install_bundle` with the tarball
+path) and reload the `session-pilot` row.
+
+Two gotchas, both hit for real:
+
+- pnpm reports "Already up to date" when the packed version number is unchanged, leaving
+  the previous install (or a stale `link:` junction) in place. `remove_bundle` first, and
+  if `node_modules/dsh-session-pilot` is still a junction, remove the reparse point with
+  `cmd /c rmdir <path>` — never a recursive delete, which can reach through the junction.
+- `~/.dsh/packages` is the local package store; keep the same filename so the profile spec
+  stays stable, and reinstall after every repack.
 
 ## Layout of the delta
 
